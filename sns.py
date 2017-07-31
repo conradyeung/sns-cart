@@ -8,30 +8,43 @@ import thread
 import sys
 import Tkinter as tk
 import json
+from random import randint
+import cfscrape
 
 start_time = time.time()
 atc_flag = False
+botcheck_flag = False
+botcheck_gate = False
 proxy_flag = False
-login_flag = True
+login_flag = False
 restock_flag = False
+autocheckout = False
+countdown_retry_delay = 0
 
 # TODO: change most of this stuff in config file later
-url = ''
-sizes = []
-accounts = []
+url = 'http://sneakersnstuff.com'
+sizes = ['10']
+accounts = [
+    {
+        'username':'',
+        'password':''
+    }
+]
 
-proxies = []
+proxies = [
+    {
+        "http": "",
+        "https": ""
+    }
+]
 
 tokens = []
 ThreadCount = 1
 threads = []
-autocheckout = False
-
-countdown_retry_delay = 0
 
 #2captcha
 API_KEY = ''  # Your 2captcha API KEY
-site_key = ''  # site-key
+site_key = '6LflVAkTAAAAABzDDFKRJdb6RphdNfRPitO3xz2c'  # site-key, read the 2captcha docs on how to get this
 s = requests.Session()
 #anticaptcha
 API_KEY_ANTI = ''
@@ -40,12 +53,34 @@ a = requests.Session()
 urlc = 'http://sneakersnstuff.com'
 
 def addToCart(id, autocheckout, size):
-    c = requests.Session()
-    # set proxy
+    global url
+    if botcheck_flag:
+        chromedriver = webdriver.Chrome()
+        chromedriver.get(urlc)
+
+        global botcheck_gate
+        while not botcheck_gate:
+            continue
+
+    headers = {
+        "User-Agent":
+            "Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36"
+    }
+    c = cfscrape.create_scraper()
+    #c = requests.Session()
+    c.headers.update(headers)
+
+    if botcheck_flag == True:
+        browser_cookies = chromedriver.get_cookies()
+        #c.cookies.update( {cookie['name']:cookie['value'] for cookie in browser_cookies} )
+        for cookie in browser_cookies:
+             c.cookies.set(cookie['name'], cookie['value'])#, path='/', domain=cookie['domain'])
+
+    #set proxy
     if proxy_flag:
         if (len(proxies) > 0):
             c.proxies.update(proxies.pop())
-    #login process
+    #login process\
     if login_flag:
         homepage = c.get("http://sneakersnstuff.com")
         homepage_content = BeautifulSoup(homepage.content, "html.parser")
@@ -54,7 +89,7 @@ def addToCart(id, autocheckout, size):
         LOGIN_HEADERS = {
             'origin': "https://www.sneakersnstuff.com",
             "referer": "https://www.sneakersnstuff.com/",
-            "user-agent": "Mozilla/5.0 (Windows NT 6.3; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/44.0.2403.157 Safari/537.36",
+            "user-agent": "Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36",
             "x-anticsrftoken": login_csrf,
             "x-requested-with": "XMLHttpRequest"
         }
@@ -96,14 +131,24 @@ def addToCart(id, autocheckout, size):
     #get product page info for product id
     #TODO: if size doesn't exist
     ID = -1
+    first_load = 0
     while (ID == -1) or (ID is None):
         # currently must have url inputted or error :S
-        global url
         url = url_entry.get()
-        response = c.get(url)
+        try:
+            if (first_load == 0):
+                printToConsole("Loading Product Page", id)
+                first_load = 1
+            response = c.get(url, timeout=10)
+        except requests.exceptions.Timeout:
+            printToConsole("Product Page Timed Out, retrying..", id)
+            continue
+        except requests.exceptions.HTTPError as err:
+            printToConsole(err, id)
         soup = BeautifulSoup(response.content, "html.parser")
         #pull post parameters CSRF, partial, productID
-        CSRF_TOKEN = c.cookies['AntiCsrfToken']
+        if 'AntiCsrfToken' in c.cookies:
+            CSRF_TOKEN = c.cookies['AntiCsrfToken']
         PARTIAL = 'cart-summary'
         size_spans = soup.find_all("span", class_="size-type")
         for span in size_spans:
@@ -115,12 +160,16 @@ def addToCart(id, autocheckout, size):
             printToConsole("ProductID not available, product is not live, or size is not available. Retrying...", id)
             if countdown_retry_delay > 0:
                 time.sleep(countdown_retry_delay)
+        if (ID == -1):
+            printToConsole("Size does not exist or page is not returning as expected. Retrying...", id)
+            if countdown_retry_delay > 0:
+                time.sleep(countdown_retry_delay)
 
     # get add to cart request ready
     HEADERS = {
         'origin': "https://www.sneakersnstuff.com",
         "referer": url,
-        "user-agent": "Mozilla/5.0 (Windows NT 6.3; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/44.0.2403.157 Safari/537.36",
+        "user-agent": "Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36",
         "x-anticsrftoken": CSRF_TOKEN,
         "x-requested-with": "XMLHttpRequest"
     }
@@ -152,27 +201,58 @@ def addToCart(id, autocheckout, size):
 
     # send atc post request, retry i times if httperror
     # TODO: handle errors better, add scheduling, and figure out better retry protocol
-    for i in range(1,5):
-        #printToConsole("Starting ATC, attempt #%d" % (i), id)
+    for i in range(1,60):
         try:
             printToConsole("ATC Request sent, attempt #%d" % (i), id)
-            atc_response = c.post('https://www.sneakersnstuff.com/en/cart/add', data=post_payload, headers=HEADERS)
+            atc_response = c.post('https://www.sneakersnstuff.com/en/cart/add', data=post_payload, headers=HEADERS, timeout=30)
             atc_response.raise_for_status()
-            sys.stdout.flush()
+        except requests.exceptions.Timeout:
+            printToConsole("ATC Request Timed Out, retrying..", id)
+            if (len(tokens) > 0):
+                post_payload = {
+                'g-recaptcha-response': tokens.pop(),
+                '_AntiCsrfToken': CSRF_TOKEN,
+                'partial': PARTIAL,
+                'id': ID
+                }
+                label.config(text="captchas: " + str(len(tokens)))
+            else:
+                post_payload = {
+                '_AntiCsrfToken': CSRF_TOKEN,
+                'partial': PARTIAL,
+                'id': ID
+                }
+            continue
         except requests.exceptions.HTTPError as err:
             if atc_response.json():
                 printToConsole("%s" % str(atc_response.json()["Status"]), id)
+                #printToConsole("error")
             if err:
-                print(err)
-                sys.stdout.flush()
-            time.sleep(0.1)
+                #print(err)
+                #sys.stdout.flush()
+                if (len(tokens) > 0):
+                    post_payload = {
+                        'g-recaptcha-response': tokens.pop(),
+                        '_AntiCsrfToken': CSRF_TOKEN,
+                        'partial': PARTIAL,
+                        'id': ID
+                    }
+                    label.config(text="captchas: " + str(len(tokens)))
+                else:
+                    post_payload = {
+                        '_AntiCsrfToken': CSRF_TOKEN,
+                        'partial': PARTIAL,
+                        'id': ID
+                    }
+            time.sleep(0.25)
+            #time.sleep(randint(10,20))
             continue
         else:
             printToConsole("[[SUCCESS]] Added to cart successfully, SIZE:%s attempt #%d" % (size, i), id)
+            #printToConsole(c.cookies)
             break
     else:
         printToConsole("[[FAILED]] All attempts failed", id)
-        sys.stdout.flush()
 
     #checkout stuff here
     if (autocheckout):
@@ -180,21 +260,20 @@ def addToCart(id, autocheckout, size):
         print("test")
     elif (not autocheckout):
         # open up chrome instance to checkout manually
-        chromedriver = webdriver.Chrome()
         printToConsole("Autocheckout Disabled: Opening Cart in Chrome", id)
-        chromedriver.get(url)
+        chromedriver2 = webdriver.Chrome()
+        chromedriver2.get(url)
         time.sleep(0.5)
-        chromedriver.delete_all_cookies()
+        chromedriver2.delete_all_cookies()
         for cookie in c.cookies:
-            chromedriver.add_cookie({
+            chromedriver2.add_cookie({
             'name': cookie.name,
-            'value': cookie.value,
-            'path': '/',
-            'domain': cookie.domain
+            'value': cookie.value
+            # 'path': '/',
+            # 'domain': cookie.domain
             })
-        print(c.cookies)
         sys.stdout.flush()
-        chromedriver.get("https://www.sneakersnstuff.com/en/cart/view")
+        chromedriver2.get("https://www.sneakersnstuff.com/en/cart/view")
         raw_input("Press enter to exit ;)\n")
 
 def startThreads():
@@ -296,10 +375,14 @@ def toggleAtcGate():
     atc_flag = not atc_flag
     label_atc.config(text="atc flag: " + str(atc_flag))
 
+def toggleBotCheckFlag():
+    global botcheck_gate
+    botcheck_gate = not botcheck_gate
+
 # UI Elements
 root = tk.Tk()
 root.title("SNS")
-root.geometry("400x400")
+root.geometry("400x500")
 
 label = tk.Label(root, fg="dark green")
 label_atc = tk.Label(root, fg="dark green")
@@ -309,14 +392,16 @@ label.grid(row=0, column=0, padx=(20,0))
 label_atc.grid(row=2, column=0, padx=(20,0))
 
 url_entry = tk.Entry(root, width=60)
-url_entry.grid(row=4, column=0, columnspan=2, padx=(15,0), pady=(5,0))
+url_entry.grid(row=5, column=0, columnspan=2, padx=(15,0), pady=(5,0))
 
 captcha2 = tk.Button(root, text='AntiCaptcha', pady=10, width=25, command=harvestCaptcha2)
 captcha = tk.Button(root, text='2Captcha', pady=10, width=25, command=harvestCaptcha)
 start = tk.Button(root, text='Start Threads / Login', pady=10, width=25, command=startThreads)
+botcheck = tk.Button(root, text='Bot Check Passed', pady=10, width=25, command=toggleBotCheckFlag)
 atc = tk.Button(root, text='Open ATC Gate', pady=10, width=25, command=toggleAtcGate)
 captcha.grid(row=0, column=1, padx=(25,50), pady=(50,10))
 captcha2.grid(row=1, column=1, padx=(25,50), pady=(10,10))
 start.grid(row=2, column=1, padx=(25,50), pady=20)
-atc.grid(row=3, column=1, padx=(25,50), pady=10)
+botcheck.grid(row=3, column=1, padx=(25,50), pady=20)
+atc.grid(row=4, column=1, padx=(25,50), pady=10)
 root.mainloop()
