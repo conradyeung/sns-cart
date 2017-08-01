@@ -7,8 +7,9 @@ TODO:
 - [x] captcha harvest
 - [ ] create config file
 - [ ] logging
-- [ ] handle captcha page
+- [X] handle captcha page (manually right now)
 - [ ] autocheckout
-- [ ] proper proxy support
+- [X] proxy support
+- [X] timeout support
 
 *moving project to different language*
